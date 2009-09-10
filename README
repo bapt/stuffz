@@ -1,4 +1,4 @@
-This is some usefull stuff done in zsh:
+This is some useful stuff done in zsh:
 
 - feedz: a news feed reader in zsh/curses that works for atom and rss
   it needs xmlstalet http://xmlstar.sourceforge.net/
