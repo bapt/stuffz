@@ -1,0 +1,438 @@
+#!/usr/bin/env zsh
+emulate -L zsh
+
+setopt extendedglob
+setopt nullglob
+zmodload zsh/curses
+zmodload zsh/datetime
+
+feedz() 
+{
+    focus_titles=false
+    focus_content=false
+    content_can_scroll_down=false
+    content_can_scroll_up=false
+    integer focus_content_x=1
+    integer focus_content_y=0
+    integer focus_titles_x=1
+    integer titles_first=1
+    integer focus_titles_y=0
+    integer focus_titles_date=1
+    typeset -A feeds title_posts posts status_posts
+    typeset -a readposts datelist
+    integer feedlistw=18
+    integer feedw
+    local feedcontent url
+    integer mainw mainh cmdlinew cmdliney
+
+    feedz.openbrowser() 
+    {
+	print -u 2 $BROWSER
+	[[ -z $BROWSER ]] && BROWSER=${${commands[(I)(*firefox*|konqueror*|arora|midori|*elinks*|*lynx*|*links*|*w3m*)]}[1]}
+	zcurses move cmdline 0 0
+	zcurses clear cmdline eol
+	zcurses string cmdline "INFO: Opening $url in $BROWSER"
+	zcurses refresh cmdline
+	$BROWSER $url &
+	zcurses string cmdline " done"
+	zcurses refresh cmdline
+
+    }
+
+    feedz.load_conf() 
+    {
+	[[ -f ~/.feedz/feed.conf ]] || { print "No configuration file found"; exit 1 }
+	for feed (${(f)"$(< ~/.feedz/feed.conf)"}); do
+	    feeds+=(${(s#|#)feed})
+	done
+	[[ -f ~/.feedz/cache/readposts ]] && readposts=($(<~/.feedz/cache/readposts))
+    }
+
+    feedz.save_readposts()
+    {
+	print -lr $readposts |> ~/.feedz/cache/readposts
+    }
+    
+    feedz.purge_cache()
+    {
+	for date ($readposts) {
+	    (( $date < $oldest )) && readposts=${readposts:#$date}
+	}
+	for date ($datelist) {
+	    if (( $date < $oldest )); then
+		datelist=${datelist:#date}
+		rm -f $posts[$date]
+	    fi
+	}
+
+	for dir (~/.feedz/cache/*(D/^F)) { rmdir $dir }
+    }
+
+    feedz.set_titles()
+    {
+	posts=()
+	cache=()
+	titles=()
+	for p (~/.feedz/cache/*/*.post) {
+	    date=${p:t:r}
+	    posts+=($date $p)
+	    strftime -s formated_date "%d/%m/%Y %H:%M:%S" ${date}
+	    post=(${(f)"$(<$p)"})
+	    title_posts+=("$date" "$formated_date | ${(l:$feedw:)post[1]} | $post[2]")
+	}
+
+    }
+    feedz.draw_titles()
+    {
+	integer y
+	integer last
+	zcurses clear titles
+	last=$(( $titles_first + $titlesh - 1 ))
+	[[ $last -gt $#datelist ]] && last=$#datelist
+	for date (${datelist[$titles_first,$last]}) {
+	    zcurses move titles $y 2
+	    [[ -z ${(M)readposts:#$date} ]] && zcurses attr titles +bold
+	    [[ $focus_titles_y -eq $y ]] && zcurses attr titles black/white
+	    zcurses string titles ${${title_posts[$date]}[$focus_titles_x,$(( $titlesw - 4 + $focus_titles_x))]}
+	    zcurses attr titles white/black
+	    [[ -z ${(M)readposts:#$date} ]] && zcurses attr titles -bold
+	    y+=1
+	}
+	zcurses refresh titles
+	zcurses move main $(( $focus_titles_y + $tby )) $titlesx
+	focus_titles=true
+    }
+    feedz.load_feed()
+    {
+	integer nbfeed=${#${(k)feeds}}
+	integer donefeed=0
+	local postdate
+	integer nbitems=0
+	local typefeed
+	integer oldest
+	local contenttype
+	# Keep only the last 10 days posts
+	oldest=$(( $EPOCHSECONDS - (10 * 24 * 60 * 60 ) ))
+	
+	feedz.purge_cache
+
+	for feed (${(k)feeds}) {
+	    donefeed+=1
+	    typefeed=""
+	    zcurses move cmdline 0 0
+	    zcurses clear cmdline eol
+	    zcurses string cmdline "Updating ${donefeed}/${nbfeed}: $feed"
+	    zcurses refresh cmdline
+	    feedcontent=(${(f)"$(${=FETCH_CMD} $feeds[$feed])"})
+	    for line ($feedcontent) {
+		[[ -n ${(M)line:#*<rss*} ]] && typefeed="RSS"
+		[[ -n ${(M)line:#*<feed*} ]] && typefeed="ATOM"
+		[[ -n ${typefeed} ]] && break
+	    }
+	    if [[ "$typefeed" = "ATOM" ]]; then
+		nbitems=$($XML_CMD sel -N atom=http://www.w3.org/2005/Atom -t -v "count(//atom:entry)" =( print -lr $feedcontent))
+		for i ({1..$nbitems});do
+		    postdate=$(${XML_CMD} sel -N atom=http://www.w3.org/2005/Atom -t -v "//atom:entry[$i]/atom:updated" =(print -lr $feedcontent))
+		    if [[ -z $postdate ]];then
+			zcurses move cmdline 0 0
+			zcurses clear cmdline eol
+			zcurses string cmdline "ERR: No dates found in feed: $feed, skipping..."
+			zcurses refresh cmdline
+			continue
+		    fi
+		    # if postdate has +\d\d:\d\d for Z
+		    strftime -r -s postdate "%Y-%m-%dT%H:%M:%S" ${${postdate/+[[:digit:]][[:digit:]]:[[:digit:]][[:digit:]]}/Z} 
+		    (( $postdate < $oldest )) && continue
+		    [[ ! -d ~/.feedz/cache/$feed ]] && mkdir ~/.feedz/cache/$feed
+		    print $feed |>  ~/.feedz/cache/$feed/$postdate.post
+		    print -lr ${${(f)"$(${XML_CMD} sel -N atom=http://www.w3.org/2005/Atom -t -v  "//atom:entry[$i]/atom:title" =(print -lr $feedcontent))"}//&amp;/&} | ${=HTML_DUMP_CMD} >> ~/.feedz/cache/$feed/$postdate.post
+		    ${XML_CMD} sel -N atom=http://www.w3.org/2005/Atom -t -v "//atom:entry[$i]/atom:link/@href" =(print -lr $feedcontent) >> ~/.feedz/cache/$feed/$postdate.post
+		    contenttype=$(${XML_CMD} sel -N atom=http://www.w3.org/2005/Atom -t -v "//atom:entry[$i]/atom:content/@type"  =(print -lr $feedcontent))
+		    if [[ -n ${(M)contenttype:#*html*} ]];then
+			${XML_CMD} sel -N atom=http://www.w3.org/2005/Atom -t -c "//atom:entry[$i]/atom:content" =(print -lr $feedcontent) | ${=HTML_DUMP_CMD} | ${=HTML_DUMP_CMD} >>  ~/.feedz/cache/$feed/$postdate.post
+		    else
+			${XML_CMD} sel -N atom=http://www.w3.org/2005/Atom -t -c "//atom:entry[$i]/atom:content" =(print -lr $feedcontent) >> ~/.feedz/cache/$feed/$postdate.post
+		    fi	
+		done
+	    elif [[ "$typefeed" = "RSS" ]]; then
+		nbitems=$(${XML_CMD} sel -t -v "count(//item)" =(print -lr $feedcontent))
+		for i ({1..$nbitems});do
+		    postdate=$(${XML_CMD} sel -t -v "//item[$i]/pubDate" =(print -lr $feedcontent))
+		    if [[ -z $postdate ]];then
+			zcurses move cmdline 0 0
+			zcurses clear cmdline eol
+			zcurses string cmdline "ERR: No dates found in feed: $feed, skipping..."
+			zcurses refresh cmdline
+			continue
+		    fi
+		    LANG=C
+		    strftime -r -s postdate "%a, %d %b %Y %H:%M:%S %z" ${postdate}
+		    (( $postdate < $oldest )) && continue
+		    [[ ! -d ~/.feedz/cache/$feed ]] && mkdir ~/.feedz/cache/$feed
+		    print $feed |>  ~/.feedz/cache/$feed/$postdate.post
+		    ${XML_CMD} sel -t -v "//item[$i]/title" =(print -lr $feedcontent) | ${=HTML_DUMP_CMD} -dump-width 1000 >> ~/.feedz/cache/$feed/$postdate.post
+		    ${XML_CMD} sel -t -v "//item[$i]/link" =(print -lr $feedcontent) >> ~/.feedz/cache/$feed/$postdate.post
+		    print -lr ${${${${(f)"$(${XML_CMD} sel -t -c "//item[$i]/description" =(print -lr $feedcontent))"}//&gt;/>}//&lt;/<}//&amp;/&} | ${=HTML_DUMP_CMD} >> ~/.feedz/cache/$feed/$postdate.post
+		done
+	    fi
+	}
+	feedz.set_titles
+	datelist=(${(O)${(k)posts}})
+	zcurses move cmdline 0 0
+	zcurses clear cmdline eol
+	zcurses string cmdline "Update done"
+    }
+    
+    feedz.init()
+    {
+	mainw=$(( $COLUMNS ))
+	mainh=$(( $LINES ))
+	mainx=0
+	mainy=0
+	cmdlinex=$(( $mainx + 1 ))
+	cmdlinew=$(( $mainw - $cmdlinex - 1))
+	cmdliney=$(( $mainh - 2 ))
+	cmdlineh=1
+	feedlisth=$(( $mainh - 3 ))
+	for feed (${(k)feeds} ) {
+	    [[ $(( $#feed + 6 )) -gt $feedlistw ]] && feedlistw=$(( $#feed + 6 ))
+	    [[ $#feed -gt $feedw ]] && feedw=$#feed
+	}
+	feedlistx=$(( $mainx + 1 ))
+	feedlisty=$(( $mainy + 1 ))
+	tbw=$(( $mainw - $feedlistw - 2 ))
+	tbx=$(( $feedlistw + 1))
+	tbh=8
+	tby=$(( $mainy + 1))
+	titlesw=$(( $tbw - 2 ))
+	titlesx=$(( $tbx + 1))
+	titlesh=$(( $tbh - 2 ))
+	titlesy=$(( $tby + 1 ))
+	cbh=$(( $feedlisth - $tbh ))
+	cbw=$tbw
+	cby=$(( $tbh + $tby ))
+	cbx=$(( $feedlistw + $feedlistx ))
+	contenth=$(( $cbh - 2 ))
+	contentx=$(( $cbx + 1))
+	contentw=$(( $cbw - 2 ))
+	contenty=$(( $cby + 1 ))
+    }
+    feedz.draw()
+    {
+	integer posy=1
+	zcurses addwin main $mainh $mainw $mainy $mainx
+	zcurses border main
+	zcurses bg main white/black
+	zcurses move main 0 4
+	zcurses string main "[ feedz: new reader ]"
+	zcurses move main $(( $mainh - 1 )) 4
+	zcurses string main "[ u:update ]-[ t:titles ]-[ c:content ]-[ o:open ]"
+	zcurses addwin cmdline $cmdlineh $cmdlinew $cmdliney $cmdlinex main
+	zcurses addwin feedlist $feedlisth $feedlistw $feedlisty $feedlistx main
+	zcurses border feedlist
+	zcurses move feedlist 0 4
+	zcurses string feedlist "[ feed list ]"
+	for feed (${(k)feeds}) {
+	    zcurses move feedlist $posy 1
+	    zcurses string feedlist "- $feed"
+	    posy+=1
+	}
+	zcurses addwin titlesborders $tbh $tbw $tby $tbx main
+	zcurses border titlesborders
+	zcurses move titlesborders 0 4
+	zcurses string titlesborders "[ news title ]"
+	zcurses addwin titles $titlesh $titlesw $titlesy $titlesx titlesborders
+	zcurses addwin contentborder $cbh $cbw $cby $cbx main
+	zcurses move contentborder 0 4
+	zcurses border contentborder
+	zcurses string contentborder "[ news content ]"
+	zcurses refresh contentborder
+	zcurses addwin content $contenth $contentw $contenty $contentx contentborder
+	zcurses refresh titles
+	zcurses refresh main
+	zcurses refresh feedlist
+    }
+   
+    feedz.show_content()
+    {
+	integer y=0
+	integer last
+	last=$(( $focus_content_y + $contenth + 1 ))
+	content=(${(f)"$(<$posts[$datelist[$focus_titles_date]])"})
+	readposts+=($datelist[$focus_titles_date])
+	feedz.save_readposts
+	zcurses clear content
+	zcurses scroll content on
+	zcurses move content 0 0
+	url=${content[3]}
+	zcurses string content "${${content[3]}[$focus_content_x, $(( $contentw - 3 + $focus_content_x))]}"
+	zcurses move content 1 0
+	zcurses string content "-----"
+	y+=2
+	content_can_scroll_down=true
+	content_can_scroll_up=true
+	(( $last > $#content )) && content_can_scroll_down=false
+	(( $focus_content_y == 0 )) && content_can_scroll_up=false
+	for line ($content[$(( $focus_content_y + 4 )),$last]) {
+	    zcurses move content $y 0
+	    zcurses string content ${line[$focus_content_x, $(( $contentw - 3 + $focus_content_x))]}
+	    y+=1
+	    [[ $y -eq $contenth ]] && break
+	}
+	zcurses refresh content
+    }
+    feedz.update()
+    {
+	feedz.load_feed
+	feedz.draw_titles
+    }
+    feedz.listen()
+    {
+	while true;do
+	    if [[ -z $key ]];then
+		zcurses input main REPLY key
+	    fi
+	    newkey=$key
+	    key=
+	    case $REPLY in
+		(k) newkey=UP;;
+		(j) newkey=DOWN;;
+		(h) newkey=LEFT;;
+		(l) newkey=RIGHT;;
+	    esac
+
+	    case $newkey in
+		(UP)
+		if [[ $focus_titles == true ]]; then
+		    if (( 0 >= ($focus_titles_date - 1) )); then
+			continue
+		    fi
+		    focus_titles_date=$(( $focus_titles_date - 1 ))
+		    if (( $focus_titles_y != 0 ));then
+			focus_titles_y=$(( $focus_titles_y - 1 ))
+		    else
+			titles_first=$(( $titles_first - 1 ))
+		    fi
+		    feedz.draw_titles
+		elif [[ $focus_content == true ]];then
+		    [[ $content_can_scroll_up == false ]] && continue
+		    focus_content_y=$(( $focus_content_y - 1 ))
+		    feedz.show_content
+		else
+		    continue
+		fi
+		;;
+		(DOWN)
+		if [[ $focus_titles == true ]]; then
+		    if (( ( $focus_titles_date + 1 ) > $#datelist ));then
+			continue
+		    fi
+		    
+		    focus_titles_date+=1
+		    if (( $focus_titles_y < ($titlesh - 1 ) )); then
+			focus_titles_y+=1
+		    else
+			titles_first+=1
+		    fi
+		    feedz.draw_titles
+		elif [[ $focus_content == true ]]; then
+		    [[ $content_can_scroll_down == false ]] && continue
+		    focus_content_y+=1
+		    feedz.show_content
+		else
+		    continue
+		fi
+		;;
+		(LEFT)
+		if [[ $focus_titles == true ]]; then
+		    (( $focus_titles_x == 1 )) && continue
+		    focus_titles_x=$(( $focus_titles_x - 1 ))
+		    feedz.draw_titles
+		fi
+		;;
+		(RIGHT)
+		if [[ $focus_titles == true ]]; then
+		    focus_titles_x+=1
+		    feedz.draw_titles
+		fi
+		;;
+		("")
+		if [[ -z $REPLY ]];then
+		    # this catches the terminal resize to redraw the whole curses window
+		    zcurses delwin content
+		    zcurses delwin titles
+		    for win ($zcurses_windows);do
+			[[ -z ${win:#(main|stdscr)} ]] && continue
+			zcurses delwin $win
+		    done
+		    zcurses delwin main
+		    zcurses clear stdscr redraw
+		    zcurses refresh stdscr
+		    feedz.init
+		    feedz.draw
+		    feedz.draw_titles
+		else
+		    case $REPLY in
+			(o)
+			    print -u 2 $url
+			    [[ -n $url ]] && feedz.openbrowser
+			;;
+			(u)
+			focus_titles=true
+			focus_content=false
+			feedz.update
+			;;
+			(c)
+			focus_titles=false
+			focus_content=true
+			;;
+			(t)
+			focus_titles=true
+			focus_content=false
+			;;
+			($'\n')
+			focus_titles=false
+			focus_content=true
+			focus_content_y=0
+			focus_content_x=1
+			feedz.show_content
+			;;
+			(q)
+			break
+			;;
+		    esac
+		fi
+		;;
+	    esac
+	done
+    }
+    # First initialisation
+    {
+	[[ -d ~/.feedz ]] || mkdir ~/.feedz
+	[[ -d ~/.feedz/cache ]] || mkdir ~/.feedz/cache
+	[[ -f ~/.feedz/feed.conf ]] || { print -u 2 "No configuration file found"; exit 1 }
+	[[ -f ~/.feedz/cache/readposts ]] && readposts=($(<~/.feedz/cache/readposts))
+	zcurses init
+	zcurses bg stdscr white/black
+	[[ -n XML_CMD ]] && XML_CMD=xml # this is xmlstarlet binary (usually /usr/local/bin/xml on FreeBSD and /usr/bin/xmlstarlet on linux)
+	[[ -n FETCH_CMD ]] && FETCH_CMD="fetch -q -o -" # if you don't have fetch you can use wget -q -O- -o /dev/null
+	[[ -n HTML_DUMP_CMD ]] && HTML_DUMP_CMD="elinks -dump"
+	feedz.load_conf
+	feedz.init
+	feedz.draw
+	feedz.load_feed
+	feedz.draw_titles
+	feedz.listen
+    } always
+    {
+	zcurses delwin content
+	zcurses delwin titles
+	for win ($zcurses_windows);do
+	    [[ -z ${win:#(main|stdscr)} ]] && continue
+	    zcurses delwin $win
+	done
+	zcurses delwin main
+	zcurses end
+    }
+}
+feedz

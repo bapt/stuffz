@@ -1,0 +1,27 @@
+This is some usefull stuff done in zsh:
+feedz: a news feed reader in zsh/curses that works for atom and rss
+  it needs xmlstalet http://xmlstar.sourceforge.net/
+  it also needs elinks or html2text capable program http://elinks.or.cz/
+  a fetcher (fetch, wget, curl)
+
+the feed list should be store in ~/.feedz/feed.conf in the following format: 
+name|url
+
+the FETCH_CMD should be a command that quietly download a file and write it to stdout by default it if "fetch -q -o -"
+the XML_CMD the name of the xmlstarlet binary on FreeBSD it is xml which is the default in this script
+the HTML_DUMP_CMD should the command to dump html into text by default it is "elinks -dump"
+
+the BROWSER variable allow you to specify your favorit web browser if not one of the following is picked up if found : 
+(*firefox*|konqueror*|arora|midori|*elinks*|*lynx*|*links*|*w3m*)
+
+All the code here is in ZSH license
+
+the commands are the following :
+q: quit
+u: update the feeds and refresh the view
+t: focus on the title window (if you are in the content window)
+c: focus on the content window
+entrer: in the title window will show the content of the post in the content window
+o: open the url the post currenly open in the content window in your favorite web browser
+arrows: navigate in the different windows
+hjkl: navigate in the different windows
