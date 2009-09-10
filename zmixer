@@ -1,0 +1,144 @@
+#!/usr/bin/env zsh
+
+zmodload zsh/curses
+
+zmix() 
+{
+    local mixer
+    local -a zmix_dev
+    integer y
+    integer posy
+    integer length
+    #get list of devices
+    zmix.draw() 
+    {
+        zcurses addwin main $(( $LINES - 2 )) $(( $COLUMNS - 2 )) 1 1
+        title="zmixer"
+        zcurses move main 1 $(( ($COLUMNS - 2 - $#title) / 2 ))
+        zcurses string main $title
+        y=4
+        for dev ($zmix_dev);do
+            y+=1
+            zcurses move main $y 5
+            zcurses string main $dev
+            zcurses move main $y 15
+            zcurses string main ":"
+            # Set the recording device
+            if [[ "x$dev" = "x$record" ]]; then
+                zcurses addwin record 1 1 $(( y + 1 )) 4 main
+                zcurses attr record red/black bold
+                zcurses string record "*"
+            fi
+            level=${${(f)"$(/usr/sbin/mixer -s $dev)"}[(w)2]}
+            numlevel=${${(s#:#)level}[1]}
+            zcurses move main $(( y )) 17
+            line="|"
+            zcurses string main "[${(r:$length::-:)${(l:$(( numlevel / 2))::=:)line}}] ($level)"
+        done
+        if (( posy == 0 ));then
+            posy=5
+        fi
+        zmix.sel $posy
+        zcurses refresh main
+    }
+    zmix.listen() 
+    {
+        while true;do
+            if [[ -z $key ]];then
+                zcurses input main REPLY key
+            fi
+            newkey=$key
+            key=
+	    case $REPLY in
+		(k) newkey=UP;;
+		(j) newkey=DOWN;;
+		(h) newkey=LEFT;;
+		(l) newkey=RIGHT;;
+	    esac
+            case $newkey in
+                (UP)
+                if (( posy <= 5 )); then
+                    zmix.sel $y
+                else
+                    zmix.sel $(( posy - 1 ))
+                fi
+                ;;
+                (DOWN)
+                if (( posy >= y )); then
+                    zmix.sel 5
+                else
+                    zmix.sel $(( posy + 1 ))
+                fi
+                ;;
+                (LEFT)
+                dev=$zmix_dev[$(( posy - 4 ))]
+                mixer $dev -1 2>&1 >/dev/null
+                zmix.redraw $dev
+                ;;
+                (RIGHT)
+                dev=$zmix_dev[$(( posy - 4 ))]
+                mixer $dev +1 2>&1 >/dev/null
+                zmix.redraw $dev
+		;;
+		("")
+		if [[ -z $REPLY ]];then
+		    zcurses delwin main
+                    zcurses clear stdscr redraw
+                    zcurses refresh stdscr
+                    zmix.draw   
+                else
+                    break
+                fi
+                ;;
+            esac
+        done
+    }
+    zmix.sel() 
+    {
+        zcurses move main $posy 0
+        zcurses string main "  "
+        posy=$1
+        zcurses move main $posy  0
+        zcurses string main "->"
+        zcurses refresh main
+    }
+    zmix.redraw() 
+    {
+        dev=$1
+        level=${${(f)"$(/usr/sbin/mixer -s $dev)"}[(w)2]}
+        numlevel=${${(s#:#)level}[1]}
+        zcurses move main $posy 16
+        zcurses clear main eol
+        level=${${(f)"$(/usr/sbin/mixer -s $dev)"}[(w)2]}
+        numlevel=${${(s#:#)level}[1]}
+        zcurses move main $posy 17
+        line="|"
+        zcurses string main "[${(r:$length::-:)${(l:$(( numlevel / 2))::=:)line}}] ($level)"
+        zcurses move main $posy 2
+        zcurses refresh main
+    }
+    #Constructor
+    {
+        length=50
+        mixer=(${=${(f)"$(/usr/sbin/mixer -S)"}})
+        for line ($mixer);do
+            [[ -n ${line:#*:*:*} ]] && continue
+            zmix_dev+=${${(s#:#)line}[1]}
+        done
+        record=$mixer[$#mixer]
+        zcurses init
+        zmix.draw
+        zmix.listen
+    } always 
+    {
+        #cleanup all windows
+        for win ($zcurses_windows);do
+            [[ -z ${win:#(main|stdscr)} ]] && continue
+            zcurses delwin $win
+        done
+        zcurses delwin main
+        zcurses end
+    }
+}
+zmix
+

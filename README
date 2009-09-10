@@ -1,5 +1,6 @@
 This is some usefull stuff done in zsh:
-feedz: a news feed reader in zsh/curses that works for atom and rss
+
+- feedz: a news feed reader in zsh/curses that works for atom and rss
   it needs xmlstalet http://xmlstar.sourceforge.net/
   it also needs elinks or html2text capable program http://elinks.or.cz/
   a fetcher (fetch, wget, curl)
@@ -25,3 +26,7 @@ entrer: in the title window will show the content of the post in the content win
 o: open the url the post currenly open in the content window in your favorite web browser
 arrows: navigate in the different windows
 hjkl: navigate in the different windows
+
+- zmixer: is a frontend int zsh/curses for the mixer(1) app on FreeBSD
+
+- zcp: is a wrapper for freebsd's cp which shows the copy progression
