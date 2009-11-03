@@ -5,6 +5,7 @@ setopt extendedglob
 setopt nullglob
 zmodload zsh/curses
 zmodload zsh/datetime
+zmodload zsh/system
 
 feedz() 
 {
@@ -22,8 +23,10 @@ feedz()
     typeset -a readposts datelist
     integer feedlistw=18
     integer feedw
-    local feedcontent url
+    local feedcontent url tmout_pid
     integer mainw mainh cmdlinew cmdliney
+
+    trap "feedz.update" 1
 
     feedz.openbrowser() 
     {
@@ -281,10 +284,17 @@ feedz()
 	}
 	zcurses refresh content
     }
+    feedz.wait_timeout()
+    {
+	    sleep 10
+	    kill -1 $1
+    }
     feedz.update()
     {
 	feedz.load_feed
 	feedz.draw_titles
+	feedz.wait_timeout $sysparams[pid] &
+	tmout_pid=$!
     }
     feedz.listen()
     {
@@ -420,11 +430,12 @@ feedz()
 	feedz.load_conf
 	feedz.init
 	feedz.draw
-	feedz.load_feed
-	feedz.draw_titles
+	feedz.update
+	#feedz.draw_titles
 	feedz.listen
     } always
     {
+	[[ -n $tmout_pid ]] && kill -15 $tmout_pid
 	zcurses delwin content
 	zcurses delwin titles
 	for win ($zcurses_windows);do
@@ -433,6 +444,7 @@ feedz()
 	done
 	zcurses delwin main
 	zcurses end
+	print "Thanks for using feedz"
     }
 }
 feedz
