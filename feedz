@@ -286,7 +286,7 @@ feedz()
     }
     feedz.wait_timeout()
     {
-	    sleep 10
+	    sleep 900
 	    kill -1 $1
     }
     feedz.update()
